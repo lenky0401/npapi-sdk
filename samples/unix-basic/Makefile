@@ -39,6 +39,18 @@
 # Basic plugin requires GTK and X11
 CFLAGS = -Wall -DXP_UNIX=1 -DMOZ_X11=1 -fPIC -g
 
+run : linux-setup
+	@echo Test: firefox file:///${shell pwd}/test.html
+	firefox file:///${shell pwd}/test.html
+
+linux-setup : linux
+	@echo Setup: sudo ln -s ${shell pwd}/npbasicplugin.so /usr/lib/mozilla/plugins/npbasicplugin.so
+	@sudo rm /usr/lib/mozilla/plugins/npbasicplugin.so
+	@sudo ln -s ${shell pwd}/npbasicplugin.so /usr/lib/mozilla/plugins/npbasicplugin.so
+
+linux : npbasicplugin
+	@chmod 755 npbasicplugin.so
+
 npbasicplugin : BasicPlugin.o
 	cc $(CFLAGS) -shared BasicPlugin.o -o npbasicplugin.so
 
@@ -47,3 +59,4 @@ BasicPlugin.o : BasicPlugin.c BasicPlugin.h
 
 clean :
 	rm npbasicplugin.so BasicPlugin.o
+

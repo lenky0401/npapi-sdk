@@ -55,6 +55,8 @@ static NPNetscapeFuncs* sBrowserFuncs = NULL;
 typedef struct InstanceData {
   NPP npp;
   NPWindow window;
+  int charNum;
+  GdkDrawable *gdkWindow;
 } InstanceData;
 
 static void
@@ -69,16 +71,24 @@ drawWindow(InstanceData* instanceData, GdkDrawable* gdkWindow)
   NPP npp = instanceData->npp;
   if (!npp)
     return;
-
-  const char* uaString = sBrowserFuncs->uagent(npp);
+  /*
+  const char* uaString = "sBrowserFuncs->uagent(npp)";
   if (!uaString)
     return;
+  */
+  int i;
+  char uaString[16];
+  memset(uaString, 0, sizeof(uaString));
+  for (i = 0; i < instanceData->charNum && i < sizeof(uaString) - 1; i ++)
+    uaString[i] = '*';
 
+  printf("uaString:%s\n", uaString);
+  
   GdkGC* gdkContext = gdk_gc_new(gdkWindow);
 
   // draw a grey background for the plugin frame
   GdkColor grey;
-  grey.red = grey.blue = grey.green = 32767;
+  grey.red = grey.blue = grey.green = 52767;
   gdk_gc_set_rgb_fg_color(gdkContext, &grey);
   gdk_draw_rectangle(gdkWindow, gdkContext, TRUE, x, y, width, height);
 
@@ -86,9 +96,9 @@ drawWindow(InstanceData* instanceData, GdkDrawable* gdkWindow)
   GdkColor black;
   black.red = black.green = black.blue = 0;
   gdk_gc_set_rgb_fg_color(gdkContext, &black);
-  gdk_gc_set_line_attributes(gdkContext, 3, GDK_LINE_SOLID, GDK_CAP_NOT_LAST, GDK_JOIN_MITER);
+  gdk_gc_set_line_attributes(gdkContext, 2, GDK_LINE_SOLID, GDK_CAP_NOT_LAST, GDK_JOIN_MITER);
   gdk_draw_rectangle(gdkWindow, gdkContext, FALSE, x + 1, y + 1,
-                     width - 3, height - 3);
+                     width - 2, height - 2);
 
   // paint the UA string
   PangoContext* pangoContext = gdk_pango_context_get();
@@ -181,6 +191,8 @@ NPP_New(NPMIMEType pluginType, NPP instance, uint16_t mode, int16_t argc, char* 
   memset(instanceData, 0, sizeof(InstanceData));
   instanceData->npp = instance;
   instance->pdata = instanceData;
+  instanceData->charNum = 0;
+  instanceData->gdkWindow = NULL;
 
   return NPERR_NO_ERROR;
 }
@@ -229,21 +241,62 @@ NPP_Print(NPP instance, NPPrint* platformPrint) {
 
 }
 
+static GdkDrawable*
+getGdkDrawable(GdkNativeWindow xid)
+{
+  GdkDrawable *drawable = GDK_DRAWABLE(gdk_pixmap_lookup(xid));
+  if (drawable) return g_object_ref(drawable);
+  drawable = GDK_DRAWABLE(gdk_window_lookup(xid));
+  if (drawable) return g_object_ref(drawable);
+  // If GDK doesn't already know which is it, a pixmap is a safe
+  // assumption. Some browsers pass a window directly, but pretending
+  // it's a pixmap works fine. Otherwise we can call
+  // gdk_window_foreign_new and pay a round-trip to get the BadWindow
+  // error before falling back to gdk_pixmap_foreign_new.
+  return GDK_DRAWABLE(gdk_pixmap_foreign_new(xid));
+}
+
 int16_t
 NPP_HandleEvent(NPP instance, void* event) {
+
   InstanceData *instanceData = (InstanceData*)(instance->pdata);
   XEvent *nativeEvent = (XEvent*)event;
 
-  if (nativeEvent->type != GraphicsExpose)
-    return 0;
+  if(nativeEvent->type == KeyPress)
+  {
+    XKeyEvent *xkey = &nativeEvent->xkey;;
+    printf("xkey->keycode:%d\n", xkey->keycode);
+    if (xkey->keycode == 22)
+      instanceData->charNum --;
+    else if (instanceData->charNum < 16)
+      instanceData->charNum ++;
+  }
+  else if(nativeEvent->type == GraphicsExpose)
+  {
+    XGraphicsExposeEvent *expose = &nativeEvent->xgraphicsexpose;
+    instanceData->window.window = (void*)(expose->drawable);
 
-  XGraphicsExposeEvent *expose = &nativeEvent->xgraphicsexpose;
-  instanceData->window.window = (void*)(expose->drawable);
+    GdkNativeWindow nativeWinId = (XID)(instanceData->window.window);
+  //  GdkDrawable* gdkWindow = GDK_DRAWABLE(gdk_window_foreign_new(nativeWinId));  
+    GdkDrawable* gdkWindow = getGdkDrawable(nativeWinId);
 
-  GdkNativeWindow nativeWinId = (XID)(instanceData->window.window);
-  GdkDrawable* gdkWindow = GDK_DRAWABLE(gdk_window_foreign_new(nativeWinId));  
-  drawWindow(instanceData, gdkWindow);
-  g_object_unref(gdkWindow);
+    // attach the provided colormap
+    NPSetWindowCallbackStruct *ws_info = (NPSetWindowCallbackStruct*)(instanceData->window.ws_info);
+    GdkVisual* gdkVisual = gdkx_visual_get(ws_info->visual ? XVisualIDFromVisual(ws_info->visual) : 0);
+    GdkColormap* gdkColormap = gdk_x11_colormap_foreign_new(gdkVisual, ws_info->colormap);
+    gdk_drawable_set_colormap(gdkWindow, gdkColormap);
+
+    instanceData->gdkWindow = gdkWindow;
+    //drawWindow(instanceData, gdkWindow);
+
+    //g_object_unref(gdkColormap);
+    //g_object_unref(gdkWindow);
+  }
+  
+  if (instanceData->gdkWindow)
+  {
+    drawWindow(instanceData, instanceData->gdkWindow);
+  }
 
   return 1;
 }
